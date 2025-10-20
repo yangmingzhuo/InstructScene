@@ -109,6 +109,13 @@ def load_object(object_path: str) -> None:
     """Loads a `.obj` model into the scene."""
     if object_path.endswith(".obj"):
         bpy.ops.import_scene.obj(filepath=object_path)
+
+        # 确保所有材质使用节点
+        for obj in bpy.context.selected_objects:
+            if obj.type == 'MESH':
+                for slot in obj.material_slots:
+                    if slot.material:
+                        slot.material.use_nodes = True
     else:
         raise ValueError(f"Unsupported file type: {object_path}")
 

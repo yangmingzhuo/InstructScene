@@ -21,6 +21,7 @@ training:
     batch_size: 128
     save_frequency: 10
     log_frequency: 1
+    warmup_epochs: 5  # 前5个epoch进行warmup
     optimizer:
         name: "adamw"
         lr: 0.0001

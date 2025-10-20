@@ -411,7 +411,7 @@ def main():
                 resolution_y=args.resolution
             )
             # Delete the temporary directory
-            os.system(f"rm -rf {tmp_dir}")
+            # os.system(f"rm -rf {tmp_dir}")
             if args.verbose:
                 print(f"Save the scene to {export_dir}\n")
 

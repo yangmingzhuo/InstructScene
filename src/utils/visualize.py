@@ -113,6 +113,12 @@ def get_textured_objects(
 
         # Create a trimesh object to save
         tr_mesh = trimesh.load(furniture.raw_model_path, force="mesh")
+        print(f"Loading texture from: {furniture.texture_image_path}")
+        if os.path.exists(furniture.texture_image_path):
+            tr_mesh.visual.material.image = Image.open(furniture.texture_image_path)
+            print(f"  Texture loaded successfully: {tr_mesh.visual.material.image.size}")
+        else:
+            print(f"  WARNING: Texture not found!")
         tr_mesh.visual.material.image = Image.open(furniture.texture_image_path)
         tr_mesh.vertices *= scale
         tr_mesh.vertices -= (tr_mesh.bounds[0] + tr_mesh.bounds[1]) / 2.
@@ -244,15 +250,23 @@ def export_scene(
             continue
 
         mtl_key = next(k for k in tex_out.keys() if k.endswith(".mtl"))
-        path_to_mtl_file = os.path.join(output_dir, mtl_names[i]+".mtl")
-        with open(path_to_mtl_file, "wb") as f:
-            f.write(
-                tex_out[mtl_key].replace(b"material_0.png", (mtl_names[i]+".png").encode("ascii"))\
-                    .replace(b"material_0.jpeg", (mtl_names[i]+".jpeg").encode("ascii"))
-            )
         tex_key = next(k for k in tex_out.keys() if not k.endswith(".mtl"))
         tex_ext = os.path.splitext(tex_key)[1]
-        path_to_tex_file = os.path.join(output_dir, mtl_names[i]+tex_ext)
+        new_tex_name = mtl_names[i] + tex_ext
+        
+        path_to_mtl_file = os.path.join(output_dir, mtl_names[i]+".mtl")
+        with open(path_to_mtl_file, "wb") as f:
+            import re
+            mtl_content = tex_out[mtl_key]
+            # 使用正则表达式替换所有纹理引用
+            mtl_content = re.sub(
+                rb'map_Kd\s+\S+\.(png|jpeg|jpg)',
+                b'map_Kd ' + new_tex_name.encode("ascii"),
+                mtl_content
+            )
+            f.write(mtl_content)
+            
+        path_to_tex_file = os.path.join(output_dir, new_tex_name)
         with open(path_to_tex_file, "wb") as f:
             f.write(tex_out[tex_key])
 

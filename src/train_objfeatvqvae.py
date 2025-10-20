@@ -7,6 +7,7 @@ from copy import deepcopy
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from diffusers.training_utils import EMAModel
 
@@ -15,6 +16,51 @@ from src.data import filter_function
 from src.data.threed_front import ThreedFront, parse_threed_front_scenes
 from src.data.threed_future_dataset import ThreedFutureFeatureDataset
 from src.models import model_from_config, optimizer_from_config
+
+
+def validate(model, val_loader, device, all_objfeats, all_jids):
+    """执行验证并计算检索准确率"""
+    model.eval()
+    rev_count, rev_correct_count = 0, 0
+    total_loss = 0.0
+    
+    with torch.no_grad():
+        for batch in yield_forever(val_loader):
+            # Move everything to the device
+            for k, v in batch.items():
+                if not isinstance(v, list):
+                    batch[k] = v.to(device)
+            
+            true_jids = batch["jids"]  # (B,)
+            
+            # 计算验证损失
+            losses = model.compute_losses(batch)
+            batch_loss = sum(losses.values())
+            total_loss += batch_loss.item() * batch["objfeats"].shape[0]
+            
+            # 重建特征并进行检索
+            rec_features = model.reconstruct(batch["objfeats"])  # (B, D)
+            rec_features = F.normalize(rec_features, dim=-1)
+            
+            # 计算余弦相似度并检索最相似的对象特征
+            sim = torch.matmul(rec_features, all_objfeats.T)  # (B, M)
+            rev_jids = all_jids[torch.argmax(sim, dim=-1).cpu()]  # (B,)
+            
+            # 评估检索性能
+            for true_jid, rev_jid in zip(true_jids, rev_jids):
+                rev_count += 1
+                if true_jid == rev_jid:
+                    rev_correct_count += 1
+            
+            # 只运行一个epoch的验证
+            if rev_count >= len(val_loader.dataset):
+                break
+    
+    avg_loss = total_loss / rev_count
+    retrieval_acc = rev_correct_count / rev_count * 100
+    
+    model.train()
+    return avg_loss, retrieval_acc
 
 
 def main():
@@ -48,7 +94,7 @@ def main():
     parser.add_argument(
         "--n_workers",
         type=int,
-        default=4,
+        default=16,
         help="The number of processed spawned by the batch provider (default=0)"
     )
     parser.add_argument(
@@ -171,8 +217,8 @@ def main():
     val_jids = [obj.model_jid for obj in val_objects]
     only_val_jids = list(set(val_jids) - set(train_jids))
     only_val_objects = [obj for obj in val_objects if obj.model_jid in only_val_jids]
-    all_jids = train_jids + only_val_jids
     all_objects = train_objects + only_val_objects
+    all_jids = train_jids + only_val_jids
 
     train_dataset = ThreedFutureFeatureDataset(
         all_objects,  # not split into train and val
@@ -188,6 +234,35 @@ def main():
         collate_fn=train_dataset.collate_fn,
         shuffle=True
     )
+
+    # 创建验证数据集和数据加载器
+    val_dataset = ThreedFutureFeatureDataset(
+        only_val_objects,
+        objfeat_type=config["model"]["objfeat_type"]
+    )
+    print(f"Load [{len(val_dataset)}] validation objects")
+
+    val_loader = MultiEpochsDataLoader(
+        val_dataset,
+        batch_size=config["validation"]["batch_size"],
+        num_workers=args.n_workers,
+        pin_memory=True,
+        collate_fn=val_dataset.collate_fn,
+        shuffle=False
+    )
+
+    # 准备所有对象特征用于检索评估
+    eval_obj_feats_dict = {
+        obj.model_jid: eval(f"obj.{config['model']['objfeat_type']}_features")
+        for obj in only_val_objects
+    }
+    eval_objfeats_list = [[k, v] for k, v in eval_obj_feats_dict.items()]
+    eval_jids_array = np.array([v[0] for v in eval_objfeats_list])
+    eval_objfeats_tensor = torch.from_numpy(
+        np.stack([v[1] for v in eval_objfeats_list], axis=0)
+    ).float().to(device)  # (M, D)
+    eval_objfeats_tensor = F.normalize(eval_objfeats_tensor, dim=-1)
+    print(f"Prepared [{len(eval_objfeats_list)}] object features for retrieval evaluation\n")
 
     # Compute the value bounds of training object features, saved as model parameters
     train_objfeats = [
@@ -208,6 +283,26 @@ def main():
         config["training"]["optimizer"],
         filter(lambda p: p.requires_grad, model.parameters())
     )
+    
+    # 添加学习率调度器：Warmup + Cosine Annealing
+    from torch.optim.lr_scheduler import LambdaLR
+    def lr_lambda(current_step):
+        epochs = config["training"]["epochs"]
+        steps_per_epoch = config["training"]["steps_per_epoch"]
+        warmup_epochs = config["training"].get("warmup_epochs", 5)
+        warmup_steps = warmup_epochs * steps_per_epoch
+        max_steps = epochs * steps_per_epoch
+        
+        if current_step < warmup_steps:
+            # Warmup阶段：线性增加
+            return float(current_step) / float(max(1, warmup_steps))
+        else:
+            # Cosine annealing阶段
+            progress = float(current_step - warmup_steps) / float(max(1, max_steps - warmup_steps))
+            return max(0.01, 0.5 * (1.0 + np.cos(np.pi * progress)))  # 最低保持1%学习率
+    
+    scheduler = LambdaLR(optimizer, lr_lambda)
+    print(f"Use learning rate scheduler: Warmup({config['training'].get('warmup_epochs', 5)} epochs) + Cosine Annealing\n")
 
     # Save the model architecture to a file
     save_model_architecture(model, exp_dir)
@@ -231,7 +326,7 @@ def main():
 
     # Load the weights from a previous run if specified
     start_epoch = 0
-    start_epoch = load_checkpoints(model, ckpt_dir, ema_states, optimizer, args.checkpoint_epoch, device) + 1
+    # start_epoch = load_checkpoints(model, ckpt_dir, ema_states, optimizer, args.checkpoint_epoch, device) + 1
 
     # Initialize the logger
     writer = SummaryWriter(os.path.join(exp_dir, "tensorboard"))
@@ -246,6 +341,7 @@ def main():
     loss_weights = config["training"]["loss_weights"]
     save_freq = config["training"]["save_frequency"]  # in epochs
     log_freq = config["training"]["log_frequency"]    # in iterations
+    eval_freq = config["validation"]["frequency"]     # in epochs
 
     # Start training
     for i in range(start_epoch, epochs):
@@ -268,8 +364,12 @@ def main():
                     total_loss += v
             # Backpropagate
             total_loss.backward()
+            # # 梯度裁剪防止梯度爆炸
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             # Update parameters
             optimizer.step()
+            # Update learning rate
+            scheduler.step()
             # Update EMA states
             if ema_states is not None:
                 ema_states.step(model.parameters())
@@ -281,8 +381,53 @@ def main():
                 if len(losses) > 1:
                     for k, v in losses.items():
                         writer.add_scalar(f"training/{k}", v.item(), i * steps_per_epoch + b)
+                # 记录当前学习率
+                current_lr = optimizer.param_groups[0]['lr']
+                writer.add_scalar("training/learning_rate", current_lr, i * steps_per_epoch + b)
                 if ema_states is not None:
                     writer.add_scalar("training/ema_decay", ema_states.cur_decay_value, i * steps_per_epoch + b)
+
+        # 每隔eval_freq个epoch进行一次验证
+        if (i+1) % eval_freq == 0:
+            print(f"\n{'='*50}")
+            print(f"Validation at epoch {i+1}")
+            print(f"{'='*50}")
+            
+            # 如果使用EMA，先复制EMA参数进行评估
+            if ema_states is not None:
+                # 保存当前模型参数
+                original_params = [p.clone() for p in model.parameters()]
+                # 复制EMA参数到模型
+                ema_states.copy_to(model.parameters())
+                
+                # 执行验证
+                val_loss, val_acc = validate(
+                    model, val_loader, device, 
+                    eval_objfeats_tensor, eval_jids_array
+                )
+                
+                # 恢复原始模型参数
+                for p, p_orig in zip(model.parameters(), original_params):
+                    p.data.copy_(p_orig)
+            else:
+                # 直接使用当前模型参数验证
+                val_loss, val_acc = validate(
+                    model, val_loader, device,
+                    eval_objfeats_tensor, eval_jids_array
+                )
+            
+            # 记录验证结果
+            print(f"Validation Loss: {val_loss:.4f}")
+            print(f"Retrieval Accuracy: {val_acc:.2f}%")
+            print(f"{'='*50}\n")
+            
+            writer.add_scalar("validation/loss", val_loss, i)
+            writer.add_scalar("validation/retrieval_accuracy", val_acc, i)
+            
+            # 将验证结果写入日志文件
+            StatsLogger.instance()["val_loss"].update(val_loss, 1)
+            StatsLogger.instance()["val_acc"].update(val_acc, 1)
+            StatsLogger.instance().print_progress(i, 0)
 
         if (i+1) % save_freq == 0:
             save_checkpoints(model, optimizer, ckpt_dir, i, ema_states)

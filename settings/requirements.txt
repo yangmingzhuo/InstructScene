@@ -6,5 +6,6 @@ clean-fid
 tensorboard
 nltk
 einops
-transformers
-diffusers
+transformers==4.30.0
+diffusers==0.27.0
+huggingface_hub==0.20.3

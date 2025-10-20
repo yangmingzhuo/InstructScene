@@ -5,3 +5,5 @@ out/
 dataset/3D-FRONT
 dataset/InstructScene
 blender/blender-*
+*.pth
+*.log
