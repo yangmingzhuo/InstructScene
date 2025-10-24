@@ -5,6 +5,7 @@ import pickle
 
 from tqdm import tqdm
 import numpy as np
+from PIL import Image
 import torch
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
@@ -109,6 +110,11 @@ def main():
         type=float,
         default=1.,
         help="scale for the classifier-free guidance"
+    )
+    parser.add_argument(
+        "--draw_scene_graph",
+        action="store_true",
+        help="Draw scene graphs"
     )
 
     args = parser.parse_args()
@@ -375,6 +381,41 @@ def main():
             progress_bar.set_postfix({
                 "rel_error": "{:.4f}".format(rel_count_errors/rel_counts)
             })
+
+            # Visualize the scene graph
+            if args.draw_scene_graph:
+                # Prepare scene graph data from ground truth
+                ii = batch_idx * B + i
+                export_dir = os.path.join(save_dir, f"{ii:04d}@{batch['scene_uids'][i]}_cfg{args.cfg_scale:.1f}")
+                os.makedirs(export_dir, exist_ok=True)
+                
+                obj_ids = batch["objs"][i].cpu()  # (N,)
+                edge_ids = batch["edges"][i].cpu()  # (N, N)
+                
+                vis_objs, vis_obj_mapping, _vis_count = [], {}, 0
+                for idx, obj_id in enumerate(obj_ids):
+                    if obj_id != dataset.n_object_types:
+                        vis_objs.append(obj_id)
+                        vis_obj_mapping[idx] = _vis_count
+                        _vis_count += 1
+                
+                vis_triples = []
+                for idx1 in range(edge_ids.shape[0]):
+                    for idx2 in range(idx1+1, edge_ids.shape[1]):
+                        if edge_ids[idx1, idx2] != dataset.n_predicate_types:
+                            vis_triples.append([
+                                vis_obj_mapping[idx1], edge_ids[idx1, idx2], vis_obj_mapping[idx2]
+                            ])
+                
+                vis_objs, vis_triples = torch.tensor(vis_objs), torch.tensor(vis_triples)
+                image = draw_scene_graph(
+                    vis_objs, vis_triples,
+                    object_types=dataset.object_types,
+                    predicate_types=dataset.predicate_types
+                )
+                Image.fromarray(image).save(
+                    os.path.join(export_dir, f"scene_graph.png")
+                )
 
             # Whether to visualize the scene by blender rendering
             if not args.visualize:

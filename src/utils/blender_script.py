@@ -30,6 +30,8 @@ parser.add_argument("--camera_dist", type=float, default=1.2)
 parser.add_argument("--resolution_x", type=int, default=256)
 parser.add_argument("--resolution_y", type=int, default=256)
 parser.add_argument("--cycle_samples", type=int, default=32)
+parser.add_argument("--export_merged", action="store_true", help="Export merged scene as single OBJ file")
+parser.add_argument("--skip_normalize", action="store_true", help="Skip normalize_scene() processing")
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
 args = parser.parse_args(argv)
@@ -170,6 +172,26 @@ def normalize_scene():
     bpy.ops.object.select_all(action="DESELECT")
 
 
+def export_merged_scene(output_path: str) -> None:
+    """Export the entire scene as a single merged OBJ file with materials and textures."""
+    # 选择所有网格对象
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in scene_meshes():
+        obj.select_set(True)
+    
+    # 导出为OBJ文件，包含材质
+    bpy.ops.export_scene.obj(
+        filepath=output_path,
+        use_selection=True,
+        use_materials=True,
+        use_triangles=False,
+        use_normals=True,
+        use_uvs=True,
+        path_mode='COPY',  # 复制纹理文件到同一目录
+    )
+    print(f">>> Exported merged scene to {output_path}")
+
+
 def setup_camera():
     cam = scene.objects["Camera"]
     cam.location = (0, 1.2, 0)
@@ -188,7 +210,18 @@ def save_images(scene_dir: str) -> None:
     # Load a scene with all the objects
     load_scene_objects(scene_dir)
 
-    normalize_scene()
+    # 根据参数决定是否normalize场景
+    if not args.skip_normalize:
+        normalize_scene()
+    else:
+        print(">>> Skipping normalize_scene() as requested")
+
+    # 如果需要导出合并场景
+    if args.export_merged:
+        merged_output_path = os.path.join(scene_dir, "scene_merged.obj")
+        export_merged_scene(merged_output_path)
+        print(f">>> Merged scene exported to {merged_output_path}")
+        return  # 只导出，不渲染
 
     # Create the lights and camera
     create_all_lights()

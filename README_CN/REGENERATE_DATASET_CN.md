@@ -187,7 +187,7 @@ if __name__ == "__main__":
 
 ```bash
 # 卧室
-python regenerate_vq_indices.py \
+python -m src.regenerate_vq_indices \
   --vqvae_config configs/threedfront_objfeat_vqvae.yaml \
   --vqvae_tag <your_vqvae_tag> \
   --vqvae_epoch -1 \
@@ -195,7 +195,7 @@ python regenerate_vq_indices.py \
   --device 0
 
 # 餐厅
-python regenerate_vq_indices.py \
+python -m src.regenerate_vq_indices \
   --vqvae_config configs/threedfront_objfeat_vqvae.yaml \
   --vqvae_tag <your_vqvae_tag> \
   --vqvae_epoch -1 \
@@ -203,7 +203,7 @@ python regenerate_vq_indices.py \
   --device 0
 
 # 客厅
-python regenerate_vq_indices.py \
+python -m src.regenerate_vq_indices \
   --vqvae_config configs/threedfront_objfeat_vqvae.yaml \
   --vqvae_tag <your_vqvae_tag> \
   --vqvae_epoch -1 \

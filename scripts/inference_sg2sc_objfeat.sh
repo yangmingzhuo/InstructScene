@@ -15,7 +15,7 @@ CUDA_VISIBLE_DEVICES=$DEVICE \
 python3 -m src.generate_sg2sc configs/${ROOM_TPYE}_sg2sc_diffusion_objfeat.yaml \
   --tag $TAG --fvqvae_tag $FVQVAE_TAG --checkpoint_epoch $EPOCH \
   --cfg_scale $CFG \
-  --n_scenes 5 --visualize --verbose --resolution 1024
+  --n_scenes 5 --visualize --verbose --resolution 1024 --draw_scene_graph
 
 # CUDA_VISIBLE_DEVICES=$DEVICE \
 # python3 src/compute_fid_scores.py configs/${ROOM_TPYE}_sg2sc_diffusion_objfeat.yaml \

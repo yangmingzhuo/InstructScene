@@ -283,6 +283,8 @@ def blender_render_scene(
     resolution_x=1024,
     resolution_y=1024,
     cycle_samples=32,
+    export_merged=False,
+    skip_normalize=False,
     verbose=False,
     timeout=15*60.,
 ):
@@ -307,6 +309,10 @@ def blender_render_scene(
     ]
     if top_down_view:
         args += ["--top_down_view"]
+    if export_merged:
+        args += ["--export_merged"]
+    if skip_normalize:
+        args += ["--skip_normalize"]
 
     # Execute the command
     if verbose:
